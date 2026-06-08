@@ -1,0 +1,580 @@
+local ox_inventory = exports.ox_inventory
+local pending = {}
+local refreshCooldown = {}
+
+local function notify(source, description, notifyType)
+    TriggerClientEvent('ox_lib:notify', source, {
+        title = 'Engraving Machine',
+        description = description,
+        type = notifyType or 'inform'
+    })
+end
+
+local function cleanText(value)
+    if type(value) ~= 'string' then return nil end
+
+    value = value:gsub('[%z\1-\31\127]', '')
+    value = value:gsub('[<>`]', '')
+    value = value:gsub('^%s+', ''):gsub('%s+$', '')
+    value = value:gsub('%s+', ' ')
+
+    if #value < Config.MinLength then return nil end
+
+    if #value > Config.MaxLength then
+        value = value:sub(1, Config.MaxLength)
+    end
+
+    return value
+end
+
+local function isBlockedItem(itemName)
+    return itemName and Config.BlockedItems[itemName] == true
+end
+
+local function copyMetadata(item)
+    local metadata = {}
+
+    if type(item.metadata) == 'table' then
+        for key, value in pairs(item.metadata) do
+            metadata[key] = value
+        end
+    end
+
+    return metadata
+end
+
+local function shouldShowTooltipField(fieldName)
+    Config.Tooltip = Config.Tooltip or {}
+
+    if fieldName == Config.MetadataKey then
+        return Config.Tooltip.ShowEngraving ~= false
+    end
+
+    if fieldName == Config.EngravedByKey then
+        return Config.Tooltip.ShowEngravedBy == true
+    end
+
+    if fieldName == Config.EngravedAtKey then
+        return Config.Tooltip.ShowEngravedAt == true
+    end
+
+    return false
+end
+
+local function getEngravingText(metadata)
+    if type(metadata) ~= 'table' then return nil end
+
+    local value = metadata[Config.InternalEngravingKey]
+    if value == nil or value == '' then
+        value = metadata[Config.MetadataKey]
+    end
+
+    if value == nil or value == '' then return nil end
+    return tostring(value)
+end
+
+local function getAudit(metadata)
+    if type(metadata) ~= 'table' then return {} end
+
+    local audit = metadata[Config.InternalAuditKey]
+    if type(audit) ~= 'table' then
+        audit = {}
+    end
+
+    -- Migrate old public audit fields into the hidden audit table.
+    if (audit.by == nil or audit.by == '') and metadata[Config.EngravedByKey] then
+        audit.by = metadata[Config.EngravedByKey]
+    end
+
+    if (audit.at == nil or audit.at == '') and metadata[Config.EngravedAtKey] then
+        audit.at = metadata[Config.EngravedAtKey]
+    end
+
+    return audit
+end
+
+local function hasAuditValues(audit)
+    return type(audit) == 'table' and ((audit.by ~= nil and audit.by ~= '') or (audit.at ~= nil and audit.at ~= ''))
+end
+
+local function appendLine(lines, label, value)
+    if value == nil or value == '' then return end
+    lines[#lines + 1] = ('%s: %s'):format(label, tostring(value))
+end
+
+local function escapePattern(value)
+    return tostring(value):gsub('([^%w])', '%%%1')
+end
+
+local function isGeneratedTooltipLine(line)
+    local labels = {
+        Config.MetadataLabel,
+        Config.EngravedByLabel,
+        Config.EngravedAtLabel,
+    }
+
+    for i = 1, #labels do
+        local label = labels[i]
+        if label and line:match('^%s*' .. escapePattern(label) .. '%s*:') then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function stripGeneratedTooltipLines(description)
+    if type(description) ~= 'string' or description == '' then return description end
+
+    local keep = {}
+
+    for line in (description .. '\n'):gmatch('(.-)\n') do
+        if line ~= '' and not isGeneratedTooltipLine(line) then
+            keep[#keep + 1] = line
+        end
+    end
+
+    if #keep == 0 then return nil end
+    return table.concat(keep, '\n')
+end
+
+local function applyDescriptionFallback(metadata)
+    Config.Tooltip = Config.Tooltip or {}
+
+    local audit = getAudit(metadata)
+    local engravingText = getEngravingText(metadata)
+
+    if Config.Tooltip.UseDescriptionFallback == false then
+        if metadata._engraving_description_managed then
+            metadata.description = metadata._engraving_original_description
+            metadata._engraving_description_managed = nil
+            metadata._engraving_original_description = nil
+        else
+            metadata.description = stripGeneratedTooltipLines(metadata.description)
+        end
+
+        return metadata
+    end
+
+    local originalDescription = metadata._engraving_original_description
+
+    if Config.Tooltip.PreserveExistingDescription ~= false then
+        if originalDescription == nil and metadata.description and not metadata._engraving_description_managed then
+            originalDescription = metadata.description
+        end
+
+        originalDescription = stripGeneratedTooltipLines(originalDescription)
+        metadata._engraving_original_description = originalDescription
+    else
+        originalDescription = nil
+        metadata._engraving_original_description = nil
+    end
+
+    local lines = {}
+
+    if originalDescription and originalDescription ~= '' then
+        lines[#lines + 1] = tostring(originalDescription)
+    end
+
+    if shouldShowTooltipField(Config.MetadataKey) then
+        appendLine(lines, Config.MetadataLabel, engravingText)
+    end
+
+    if shouldShowTooltipField(Config.EngravedByKey) then
+        appendLine(lines, Config.EngravedByLabel, audit.by)
+    end
+
+    if shouldShowTooltipField(Config.EngravedAtKey) then
+        appendLine(lines, Config.EngravedAtLabel, audit.at)
+    end
+
+    if #lines > 0 then
+        metadata.description = table.concat(lines, Config.Tooltip.DescriptionSeparator or '\n')
+        metadata._engraving_description_managed = true
+    else
+        metadata.description = originalDescription
+        metadata._engraving_description_managed = nil
+        metadata._engraving_original_description = nil
+    end
+
+    return metadata
+end
+
+local function syncEngravingMetadata(metadata, source, newText)
+    if type(metadata) ~= 'table' then metadata = {} end
+
+    local engravingText = cleanText(newText) or getEngravingText(metadata)
+
+    if engravingText then
+        metadata[Config.InternalEngravingKey] = engravingText
+
+        if shouldShowTooltipField(Config.MetadataKey) then
+            metadata[Config.MetadataKey] = engravingText
+        elseif Config.CleanHiddenTooltipFields ~= false then
+            metadata[Config.MetadataKey] = nil
+        end
+    end
+
+    local audit = getAudit(metadata)
+
+    -- Audit metadata is mandatory internal data used for backend functionality and admin logging.
+    if source then
+        audit.by = GetPlayerName(source) or ('ID %s'):format(source)
+        audit.at = os.date(Config.TimestampFormat or '!%Y-%m-%d %H:%M:%S UTC')
+    end
+
+    if hasAuditValues(audit) then
+        metadata[Config.InternalAuditKey] = audit
+    else
+        metadata[Config.InternalAuditKey] = nil
+    end
+
+    if shouldShowTooltipField(Config.EngravedByKey) and audit.by then
+        metadata[Config.EngravedByKey] = audit.by
+    elseif Config.CleanHiddenTooltipFields ~= false then
+        metadata[Config.EngravedByKey] = nil
+    end
+
+    if shouldShowTooltipField(Config.EngravedAtKey) and audit.at then
+        metadata[Config.EngravedAtKey] = audit.at
+    elseif Config.CleanHiddenTooltipFields ~= false then
+        metadata[Config.EngravedAtKey] = nil
+    end
+
+    applyDescriptionFallback(metadata)
+
+    return metadata
+end
+
+local function hasEngravingMetadata(metadata)
+    if type(metadata) ~= 'table' then return false end
+
+    return metadata[Config.InternalEngravingKey] ~= nil
+        or metadata[Config.MetadataKey] ~= nil
+        or metadata[Config.InternalAuditKey] ~= nil
+        or metadata[Config.EngravedByKey] ~= nil
+        or metadata[Config.EngravedAtKey] ~= nil
+        or metadata._engraving_description_managed ~= nil
+end
+
+local function validate(source, machineSlot, targetSlot, text, expectedTargetName)
+    machineSlot = tonumber(machineSlot)
+    targetSlot = tonumber(targetSlot)
+    text = cleanText(text)
+
+    if not machineSlot then
+        return false, Config.Notify.invalidMachine
+    end
+
+    if not targetSlot or machineSlot == targetSlot then
+        return false, Config.Notify.invalidTarget
+    end
+
+    if not text then
+        return false, Config.Notify.invalidText
+    end
+
+    local machine = ox_inventory:GetSlot(source, machineSlot)
+    if not machine or machine.name ~= Config.MachineItem then
+        return false, Config.Notify.invalidMachine
+    end
+
+    local target = ox_inventory:GetSlot(source, targetSlot)
+    if not target or not target.name or (target.count or 0) < 1 then
+        return false, Config.Notify.invalidTarget
+    end
+
+    if expectedTargetName and target.name ~= expectedTargetName then
+        return false, Config.Notify.invalidTarget
+    end
+
+    if isBlockedItem(target.name) then
+        return false, Config.Notify.blockedTarget
+    end
+
+    local metadata = type(target.metadata) == 'table' and target.metadata or {}
+    if not Config.AllowReEngrave and getEngravingText(metadata) then
+        return false, Config.Notify.alreadyEngraved
+    end
+
+    return true, nil, machine, target, text
+end
+
+local function validatePreparedTarget(source, request)
+    if type(request) ~= 'table' then
+        return false, Config.Notify.failed
+    end
+
+    if os.time() > request.expires then
+        return false, Config.Notify.failed
+    end
+
+    local targetSlot = tonumber(request.targetSlot)
+    if not targetSlot then
+        return false, Config.Notify.invalidTarget
+    end
+
+    local target = ox_inventory:GetSlot(source, targetSlot)
+    if not target or not target.name or (target.count or 0) < 1 then
+        return false, Config.Notify.invalidTarget
+    end
+
+    if request.targetName and target.name ~= request.targetName then
+        return false, Config.Notify.invalidTarget
+    end
+
+    if isBlockedItem(target.name) then
+        return false, Config.Notify.blockedTarget
+    end
+
+    local metadata = type(target.metadata) == 'table' and target.metadata or {}
+    if not Config.AllowReEngrave and getEngravingText(metadata) then
+        return false, Config.Notify.alreadyEngraved
+    end
+
+    return true, nil, target, request.text
+end
+
+local function getIdentifierByPrefix(source, prefix)
+    local identifiers = GetPlayerIdentifiers(source)
+
+    for i = 1, #identifiers do
+        if identifiers[i]:sub(1, #prefix) == prefix then
+            return identifiers[i]
+        end
+    end
+
+    return nil
+end
+
+local function getIdentifierSummary(source)
+    if not Config.Webhook or Config.Webhook.IncludeIdentifiers == false then
+        return nil
+    end
+
+    local values = {}
+    local license = getIdentifierByPrefix(source, 'license:')
+    local discord = getIdentifierByPrefix(source, 'discord:')
+    local fivem = getIdentifierByPrefix(source, 'fivem:')
+
+    if license then values[#values + 1] = license end
+    if discord then values[#values + 1] = discord end
+    if fivem then values[#values + 1] = fivem end
+
+    if #values == 0 then return nil end
+
+    return table.concat(values, '\n')
+end
+
+local function getItemLabel(item)
+    if item.label and item.label ~= '' then
+        return item.label
+    end
+
+    local ok, itemData = pcall(function()
+        return ox_inventory:Items(item.name)
+    end)
+
+    if ok and itemData and itemData.label then
+        return itemData.label
+    end
+
+    return item.name
+end
+
+local function sendWebhookLog(source, target, text, previousEngraving, metadata)
+    local webhook = Config.Webhook
+    if not webhook or webhook.Enabled ~= true or type(webhook.Url) ~= 'string' or webhook.Url == '' then return end
+
+    local audit = getAudit(metadata)
+    local playerName = GetPlayerName(source) or ('ID %s'):format(source)
+    local itemLabel = getItemLabel(target)
+    local fields = {
+        { name = 'Player', value = ('%s [%s]'):format(playerName, source), inline = false },
+        { name = 'Item', value = ('%s (`%s`)'):format(itemLabel, target.name), inline = true },
+        { name = 'Slot', value = tostring(target.slot), inline = true },
+        { name = 'Engraving', value = tostring(text), inline = false },
+        { name = 'Engraved At', value = tostring(audit.at or 'Unknown'), inline = true },
+    }
+
+    if webhook.IncludePreviousEngraving ~= false and previousEngraving and previousEngraving ~= '' then
+        fields[#fields + 1] = { name = 'Previous Engraving', value = tostring(previousEngraving), inline = false }
+    end
+
+    local identifierSummary = getIdentifierSummary(source)
+    if identifierSummary then
+        fields[#fields + 1] = { name = 'Identifiers', value = identifierSummary, inline = false }
+    end
+
+    local payload = {
+        username = webhook.Username or 'Engraving Machine Logs',
+        avatar_url = webhook.AvatarUrl or '',
+        embeds = {
+            {
+                title = 'Item Engraved',
+                color = tonumber(webhook.Color) or 16753920,
+                fields = fields,
+                footer = { text = 'ox_engraving_machine' },
+                timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ')
+            }
+        }
+    }
+
+    PerformHttpRequest(webhook.Url, function(statusCode, responseText)
+        if statusCode < 200 or statusCode >= 300 then
+            print(('^3[ox_engraving_machine]^7 Discord webhook returned HTTP %s: %s'):format(statusCode, responseText or ''))
+        end
+    end, 'POST', json.encode(payload), { ['Content-Type'] = 'application/json' })
+end
+
+local function refreshInventoryMetadata(source, silent)
+    local items = ox_inventory:GetInventoryItems(source)
+    local changed = 0
+
+    for _, item in pairs(items or {}) do
+        local metadata = type(item.metadata) == 'table' and item.metadata or {}
+
+        if hasEngravingMetadata(metadata) then
+            local normalized = syncEngravingMetadata(copyMetadata(item), nil, nil)
+            ox_inventory:SetMetadata(source, item.slot, normalized)
+            changed = changed + 1
+        end
+    end
+
+    if not silent then
+        notify(source, ('%s %s'):format(Config.Notify.repaired, changed > 0 and ('(' .. changed .. ' item(s))') or '(no engraved items found)'), changed > 0 and 'success' or 'inform')
+    end
+
+    return changed
+end
+
+lib.callback.register('ox_engraving_machine:prepare', function(source, machineSlot, targetSlot, engravingText)
+    local ok, message, _, target, text = validate(source, machineSlot, targetSlot, engravingText)
+
+    if not ok then
+        return false, message
+    end
+
+    pending[source] = {
+        machineSlot = tonumber(machineSlot),
+        targetSlot = tonumber(targetSlot),
+        targetName = target.name,
+        text = text,
+        expires = os.time() + Config.PendingTimeout,
+    }
+
+    return true, Config.Notify.prepared
+end)
+
+RegisterNetEvent('ox_engraving_machine:cancel', function()
+    pending[source] = nil
+end)
+
+RegisterNetEvent('ox_engraving_machine:refreshEngravedItems', function()
+    local src = source
+    local now = os.time()
+
+    if refreshCooldown[src] and refreshCooldown[src] > now then return end
+    refreshCooldown[src] = now + 10
+
+    refreshInventoryMetadata(src, true)
+end)
+
+AddEventHandler('playerDropped', function()
+    pending[source] = nil
+    refreshCooldown[source] = nil
+end)
+
+exports('engraving_machine', function(event, item, inventory, slot, data)
+    local source = inventory and inventory.id
+    if not source then return false end
+
+    local request = pending[source]
+
+    if event == 'usingItem' then
+        if not request or request.machineSlot ~= slot or os.time() > request.expires then
+            pending[source] = nil
+            notify(source, Config.Notify.failed, 'error')
+            return false
+        end
+
+        local ok, message = validate(source, slot, request.targetSlot, request.text, request.targetName)
+        if not ok then
+            pending[source] = nil
+            notify(source, message or Config.Notify.failed, 'error')
+            return false
+        end
+
+        return
+    end
+
+    if event == 'usedItem' then
+        if not request then return false end
+
+        -- On the final durability use, ox_inventory may consume/delete the engraving machine
+        -- before this callback fires. Do not re-check the machine slot here; it was already
+        -- validated in usingItem immediately before the progress/consume step.
+        if slot and request.machineSlot ~= slot then
+            pending[source] = nil
+            notify(source, Config.Notify.failed, 'error')
+            return false
+        end
+
+        local ok, message, target, text = validatePreparedTarget(source, request)
+        pending[source] = nil
+
+        if not ok then
+            notify(source, message or Config.Notify.failed, 'error')
+            return false
+        end
+
+        local metadata = copyMetadata(target)
+        local previousEngraving = getEngravingText(metadata)
+
+        metadata = syncEngravingMetadata(metadata, source, text)
+
+        ox_inventory:SetMetadata(source, target.slot, metadata)
+        notify(source, Config.Notify.success, 'success')
+        sendWebhookLog(source, target, text, previousEngraving, metadata)
+        return
+    end
+end)
+
+RegisterCommand('engravingdebug', function(source)
+    if source <= 0 then return end
+
+    local items = ox_inventory:GetInventoryItems(source)
+    local found = false
+
+    for _, item in pairs(items or {}) do
+        local metadata = type(item.metadata) == 'table' and item.metadata or {}
+
+        if hasEngravingMetadata(metadata) then
+            found = true
+            print(('^2[ox_engraving_machine]^7 %s slot %s metadata: %s'):format(item.name, item.slot, json.encode(metadata)))
+        end
+    end
+
+    if not found then
+        print(('^3[ox_engraving_machine]^7 No engraved items found for player %s.'):format(source))
+    end
+end, false)
+
+RegisterCommand('engravingfix', function(source)
+    if source <= 0 then return end
+    refreshInventoryMetadata(source, false)
+end, false)
+
+CreateThread(function()
+    Wait(1000)
+
+    if GetResourceState('ox_inventory') ~= 'started' then
+        print('^1[ox_engraving_machine]^7 ox_inventory is not started. Start ox_inventory before this resource.')
+        return
+    end
+
+    local item = ox_inventory:Items(Config.MachineItem)
+    if not item then
+        print(('^3[ox_engraving_machine]^7 Item "%s" is not registered in ox_inventory/data/items.lua. See install/items.lua.'):format(Config.MachineItem))
+    end
+end)
