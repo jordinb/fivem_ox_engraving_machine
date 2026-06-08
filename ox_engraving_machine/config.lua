@@ -30,6 +30,11 @@ Config.MaxLength = 64
 -- Allows replacing an existing engraving on the same item.
 Config.AllowReEngrave = true
 
+-- When true, overwriting an existing engraving requires an ACE permission.
+-- Set `Config.ReEngraveAcePermission` to the ACE permission/group used on your server (for example: 'group.admin').
+Config.RequireReEngraveAce = true
+Config.ReEngraveAcePermission = 'engraving.overwrite'
+
 -- Prevent specific items from being engraved by adding them to the blacklist below.
 -- The engraving machine is blocked by default so players cannot engrave the tool itself.
 Config.BlockedItems = {
@@ -104,4 +109,5 @@ Config.Notify = {
     repaired = 'Engraving metadata display refreshed.',
     failed = 'Engraving failed.',
     commandCooldown = 'Command is on cooldown. Try again in a few minutes.',
+    noPermission = 'You do not have permission to overwrite engravings.',
 }

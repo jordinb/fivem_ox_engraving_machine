@@ -340,8 +340,15 @@ local function validate(source, machineSlot, targetSlot, text, expectedTargetNam
     end
 
     local metadata = type(target.metadata) == 'table' and target.metadata or {}
-    if not Config.AllowReEngrave and getEngravingText(metadata) then
-        return false, Config.Notify.alreadyEngraved
+    local existing = getEngravingText(metadata)
+    if existing then
+        if not Config.AllowReEngrave then
+            return false, Config.Notify.alreadyEngraved
+        end
+
+        if Config.RequireReEngraveAce and not IsPlayerAceAllowed(source, Config.ReEngraveAcePermission or '') then
+            return false, Config.Notify.noPermission
+        end
     end
 
     return true, nil, machine, target, text
@@ -375,8 +382,15 @@ local function validatePreparedTarget(source, request)
     end
 
     local metadata = type(target.metadata) == 'table' and target.metadata or {}
-    if not Config.AllowReEngrave and getEngravingText(metadata) then
-        return false, Config.Notify.alreadyEngraved
+    local existing = getEngravingText(metadata)
+    if existing then
+        if not Config.AllowReEngrave then
+            return false, Config.Notify.alreadyEngraved
+        end
+
+        if Config.RequireReEngraveAce and not IsPlayerAceAllowed(source, Config.ReEngraveAcePermission or '') then
+            return false, Config.Notify.noPermission
+        end
     end
 
     return true, nil, target, request.text
