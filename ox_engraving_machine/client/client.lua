@@ -1,5 +1,6 @@
 local busy = false
 local activeUseId = 0
+local metadataDisplayRegistered = false
 
 local function notify(description, notifyType)
     lib.notify({
@@ -45,17 +46,15 @@ local function getMetadataDisplayEntries()
     return entries
 end
 
-local function registerMetadataDisplay()
+local function registerMetadataDisplay(force)
+    if metadataDisplayRegistered and not force then return end
+
     local entries = getMetadataDisplayEntries()
     if #entries == 0 then return end
 
-    -- Array format supported by ox_inventory.
+    -- Array format is supported by ox_inventory and preserves tooltip display order.
     exports.ox_inventory:displayMetadata(entries)
-
-    -- Individual registration as a compatibility fallback for forks/builds with stricter signatures.
-    for i = 1, #entries do
-        exports.ox_inventory:displayMetadata(entries[i][1], entries[i][2])
-    end
+    metadataDisplayRegistered = true
 end
 
 local function getEngravingText(metadata)
@@ -207,12 +206,4 @@ CreateThread(function()
     TriggerServerEvent('ox_engraving_machine:refreshEngravedItems')
 end)
 
-AddEventHandler('ox_inventory:updateInventory', function()
-    registerMetadataDisplay()
-end)
 
-RegisterCommand('engravingdisplay', function()
-    registerMetadataDisplay()
-    TriggerServerEvent('ox_engraving_machine:refreshEngravedItems')
-    notify('Engraving tooltip metadata display refreshed.', 'success')
-end, false)

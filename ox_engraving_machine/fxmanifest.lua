@@ -5,7 +5,7 @@ lua54 'yes'
 name 'ox_engraving_machine'
 author 'Infamous Development Studios / Jordin B.'
 description 'Drag-and-drop Ox Inventory addon module for engraving custom metadata labels onto items.'
-version '1.1.3'
+version '1.2.0'
 
 shared_scripts {
     '@ox_lib/init.lua',

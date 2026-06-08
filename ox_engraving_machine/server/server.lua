@@ -1,6 +1,7 @@
 local ox_inventory = exports.ox_inventory
 local pending = {}
 local refreshCooldown = {}
+local debugCooldown = {}
 
 local function notify(source, description, notifyType)
     TriggerClientEvent('ox_lib:notify', source, {
@@ -31,16 +32,25 @@ local function isBlockedItem(itemName)
     return itemName and Config.BlockedItems[itemName] == true
 end
 
-local function copyMetadata(item)
-    local metadata = {}
+local function copyValue(value, seen)
+    if type(value) ~= 'table' then return value end
 
-    if type(item.metadata) == 'table' then
-        for key, value in pairs(item.metadata) do
-            metadata[key] = value
-        end
+    seen = seen or {}
+    if seen[value] then return seen[value] end
+
+    local copy = {}
+    seen[value] = copy
+
+    for key, child in pairs(value) do
+        copy[copyValue(key, seen)] = copyValue(child, seen)
     end
 
-    return metadata
+    return copy
+end
+
+local function copyMetadata(item)
+    if type(item) ~= 'table' or type(item.metadata) ~= 'table' then return {} end
+    return copyValue(item.metadata)
 end
 
 local function shouldShowTooltipField(fieldName)
@@ -73,6 +83,22 @@ local function getEngravingText(metadata)
     return tostring(value)
 end
 
+local function getIdentifierMap(source)
+    local identifiers = {}
+    local rawIdentifiers = GetPlayerIdentifiers(source)
+
+    for i = 1, #rawIdentifiers do
+        local identifier = rawIdentifiers[i]
+        local separator = identifier:find(':', 1, true)
+
+        if separator then
+            identifiers[identifier:sub(1, separator - 1)] = identifier
+        end
+    end
+
+    return identifiers
+end
+
 local function getAudit(metadata)
     if type(metadata) ~= 'table' then return {} end
 
@@ -84,6 +110,7 @@ local function getAudit(metadata)
     -- Migrate old public audit fields into the hidden audit table.
     if (audit.by == nil or audit.by == '') and metadata[Config.EngravedByKey] then
         audit.by = metadata[Config.EngravedByKey]
+        audit.playerName = metadata[Config.EngravedByKey]
     end
 
     if (audit.at == nil or audit.at == '') and metadata[Config.EngravedAtKey] then
@@ -94,7 +121,7 @@ local function getAudit(metadata)
 end
 
 local function hasAuditValues(audit)
-    return type(audit) == 'table' and ((audit.by ~= nil and audit.by ~= '') or (audit.at ~= nil and audit.at ~= ''))
+    return type(audit) == 'table' and next(audit) ~= nil
 end
 
 local function appendLine(lines, label, value)
@@ -181,7 +208,7 @@ local function applyDescriptionFallback(metadata)
     end
 
     if shouldShowTooltipField(Config.EngravedByKey) then
-        appendLine(lines, Config.EngravedByLabel, audit.by)
+        appendLine(lines, Config.EngravedByLabel, audit.by or audit.playerName)
     end
 
     if shouldShowTooltipField(Config.EngravedAtKey) then
@@ -198,6 +225,27 @@ local function applyDescriptionFallback(metadata)
     end
 
     return metadata
+end
+
+local function createAudit(source)
+    local playerName = GetPlayerName(source) or ('ID %s'):format(source)
+    local unix = os.time()
+    local identifiers = getIdentifierMap(source)
+
+    return {
+        by = playerName,
+        playerName = playerName,
+        source = source,
+        identifiers = identifiers,
+        license = identifiers.license,
+        license2 = identifiers.license2,
+        discord = identifiers.discord,
+        fivem = identifiers.fivem,
+        steam = identifiers.steam,
+        at = os.date(Config.TimestampFormat or '!%Y-%m-%d %H:%M:%S UTC', unix),
+        iso = os.date('!%Y-%m-%dT%H:%M:%SZ', unix),
+        unix = unix,
+    }
 end
 
 local function syncEngravingMetadata(metadata, source, newText)
@@ -219,8 +267,7 @@ local function syncEngravingMetadata(metadata, source, newText)
 
     -- Audit metadata is mandatory internal data used for backend functionality and admin logging.
     if source then
-        audit.by = GetPlayerName(source) or ('ID %s'):format(source)
-        audit.at = os.date(Config.TimestampFormat or '!%Y-%m-%d %H:%M:%S UTC')
+        audit = createAudit(source)
     end
 
     if hasAuditValues(audit) then
@@ -229,8 +276,8 @@ local function syncEngravingMetadata(metadata, source, newText)
         metadata[Config.InternalAuditKey] = nil
     end
 
-    if shouldShowTooltipField(Config.EngravedByKey) and audit.by then
-        metadata[Config.EngravedByKey] = audit.by
+    if shouldShowTooltipField(Config.EngravedByKey) and (audit.by or audit.playerName) then
+        metadata[Config.EngravedByKey] = audit.by or audit.playerName
     elseif Config.CleanHiddenTooltipFields ~= false then
         metadata[Config.EngravedByKey] = nil
     end
@@ -335,34 +382,21 @@ local function validatePreparedTarget(source, request)
     return true, nil, target, request.text
 end
 
-local function getIdentifierByPrefix(source, prefix)
-    local identifiers = GetPlayerIdentifiers(source)
-
-    for i = 1, #identifiers do
-        if identifiers[i]:sub(1, #prefix) == prefix then
-            return identifiers[i]
-        end
-    end
-
-    return nil
-end
-
 local function getIdentifierSummary(source)
     if not Config.Webhook or Config.Webhook.IncludeIdentifiers == false then
         return nil
     end
 
+    local identifiers = getIdentifierMap(source)
     local values = {}
-    local license = getIdentifierByPrefix(source, 'license:')
-    local discord = getIdentifierByPrefix(source, 'discord:')
-    local fivem = getIdentifierByPrefix(source, 'fivem:')
+    local orderedKeys = { 'license', 'license2', 'discord', 'fivem', 'steam' }
 
-    if license then values[#values + 1] = license end
-    if discord then values[#values + 1] = discord end
-    if fivem then values[#values + 1] = fivem end
+    for i = 1, #orderedKeys do
+        local identifier = identifiers[orderedKeys[i]]
+        if identifier then values[#values + 1] = identifier end
+    end
 
     if #values == 0 then return nil end
-
     return table.concat(values, '\n')
 end
 
@@ -415,12 +449,14 @@ local function sendWebhookLog(source, target, text, previousEngraving, metadata)
                 color = tonumber(webhook.Color) or 16753920,
                 fields = fields,
                 footer = { text = 'ox_engraving_machine' },
-                timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ')
+                timestamp = audit.iso or os.date('!%Y-%m-%dT%H:%M:%SZ')
             }
         }
     }
 
     PerformHttpRequest(webhook.Url, function(statusCode, responseText)
+        statusCode = tonumber(statusCode) or 0
+
         if statusCode < 200 or statusCode >= 300 then
             print(('^3[ox_engraving_machine]^7 Discord webhook returned HTTP %s: %s'):format(statusCode, responseText or ''))
         end
@@ -460,7 +496,7 @@ lib.callback.register('ox_engraving_machine:prepare', function(source, machineSl
         targetSlot = tonumber(targetSlot),
         targetName = target.name,
         text = text,
-        expires = os.time() + Config.PendingTimeout,
+        expires = os.time() + (Config.PendingTimeout or 45),
     }
 
     return true, Config.Notify.prepared
@@ -483,10 +519,11 @@ end)
 AddEventHandler('playerDropped', function()
     pending[source] = nil
     refreshCooldown[source] = nil
+    debugCooldown[source] = nil
 end)
 
 exports('engraving_machine', function(event, item, inventory, slot, data)
-    local source = inventory and inventory.id
+    local source = inventory and tonumber(inventory.id)
     if not source then return false end
 
     local request = pending[source]
@@ -541,7 +578,16 @@ exports('engraving_machine', function(event, item, inventory, slot, data)
 end)
 
 RegisterCommand('engravingdebug', function(source)
-    if source <= 0 then return end
+    if source <= 0 then
+        return print('^3[ox_engraving_machine]^7 /engravingdebug must be run in-game so it can inspect the caller inventory.')
+    end
+
+    local now = os.time()
+    if debugCooldown[source] and debugCooldown[source] > now then
+        return notify(source, Config.Notify.commandCooldown, 'error')
+    end
+
+    debugCooldown[source] = now + (tonumber(Config.DebugCooldown) or 300)
 
     local items = ox_inventory:GetInventoryItems(source)
     local found = false
@@ -560,11 +606,6 @@ RegisterCommand('engravingdebug', function(source)
     end
 end, false)
 
-RegisterCommand('engravingfix', function(source)
-    if source <= 0 then return end
-    refreshInventoryMetadata(source, false)
-end, false)
-
 CreateThread(function()
     Wait(1000)
 
@@ -576,5 +617,16 @@ CreateThread(function()
     local item = ox_inventory:Items(Config.MachineItem)
     if not item then
         print(('^3[ox_engraving_machine]^7 Item "%s" is not registered in ox_inventory/data/items.lua. See install/items.lua.'):format(Config.MachineItem))
+        return
+    end
+
+    local uses = tonumber(Config.MachineUses) or 10
+    if uses < 1 then uses = 10 end
+
+    local expectedConsume = 1 / uses
+    local actualConsume = tonumber(item.consume)
+
+    if not actualConsume or math.abs(actualConsume - expectedConsume) > 0.0001 then
+        print(('^3[ox_engraving_machine]^7 Item "%s" should use consume = %.4f for %s durability uses. Current consume: %s.'):format(Config.MachineItem, expectedConsume, uses, tostring(item.consume)))
     end
 end)

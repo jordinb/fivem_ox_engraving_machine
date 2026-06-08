@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /d e:\\\\Development\\\\fivem_ox_engraving_machine ; python - <<'PY'\nfrom pathlib import Path\np = Path\\('ox_engraving_machine/client/client\\.lua'\\)\ntext = p\\.read_text\\(encoding='utf-8'\\)\nidx = text\\.find\\(\"RegisterCommand\\('engravingdisplay'\"\\)\nprint\\('idx', idx\\)\nprint\\(repr\\(text\\[idx:idx\\+200\\]\\)\\)\nPY$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

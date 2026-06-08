@@ -3,6 +3,11 @@ Config = {}
 -- The usable Ox Inventory item name.
 Config.MachineItem = 'engraving_machine'
 
+-- Total durability uses for a full engraving machine.
+-- ox_inventory implements this through the item definition's consume value: 1 / MachineUses.
+-- The server checks the registered item on startup and warns if ox_inventory/data/items.lua is out of sync.
+Config.MachineUses = 10
+
 -- Public tooltip metadata applied to the engraved target item when enabled.
 -- These are the fields that can be displayed by ox_inventory:displayMetadata.
 Config.MetadataKey = 'engraving'
@@ -76,6 +81,10 @@ Config.Webhook = {
 -- Server-side pending request timeout, in seconds.
 Config.PendingTimeout = 45
 
+-- Cooldown for the engraving debug command, in seconds.
+-- Prevents repeated log spam in production.
+Config.DebugCooldown = 300
+
 -- Client-side safety timeout in milliseconds.
 -- Used only as a fallback for ox_inventory builds/forks that do not call the useItem callback when progress is cancelled.
 -- This does not consume durability; it only clears the local interaction lock and server pending request.
@@ -94,4 +103,5 @@ Config.Notify = {
     success = 'Item engraved successfully.',
     repaired = 'Engraving metadata display refreshed.',
     failed = 'Engraving failed.',
+    commandCooldown = 'Command is on cooldown. Try again in a few minutes.',
 }

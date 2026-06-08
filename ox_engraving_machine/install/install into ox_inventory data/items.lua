@@ -11,7 +11,7 @@
     image = 'engraving_machine.png', -- ox_inventory/web/images/engraving_machine.png
     stack = false,
     close = true,
-    consume = 0.10, -- 10 uses from full durability. 0.20 = 5 uses, 0.05 = 20 uses.
+    consume = 0.10, -- 10 uses from full durability (1 / Config.MachineUses). 0.20 = 5 uses, 0.05 = 20 uses.
     decay = true,
     client = {
         export = 'ox_engraving_machine.engraving_machine',
