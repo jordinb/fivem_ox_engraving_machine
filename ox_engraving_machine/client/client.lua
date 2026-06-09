@@ -114,6 +114,16 @@ local function getTargetOptions(machineSlot)
     return options
 end
 
+local function getItemBySlot(slot)
+    for _, item in pairs(exports.ox_inventory:GetPlayerItems() or {}) do
+        if item and item.slot == slot then
+            return item
+        end
+    end
+
+    return nil
+end
+
 exports('engraving_machine', function(data, slot)
     if busy then return end
 
@@ -156,6 +166,25 @@ exports('engraving_machine', function(data, slot)
 
     if not targetSlot or type(engravingText) ~= 'string' then
         return notify(Config.Notify.invalidText, 'error')
+    end
+
+    local targetItem = getItemBySlot(targetSlot)
+    local targetName = itemDisplayName(targetItem or { label = ('Slot %s'):format(tostring(targetSlot)) })
+    local confirmation = lib.inputDialog('Confirm Engraving', {
+        {
+            type = 'select',
+            label = ('Engrave %s?'):format(targetName),
+            description = ('Engraving text: %s'):format(engravingText),
+            options = {
+                { label = 'Yes, start engraving', value = 'yes' },
+                { label = 'No, cancel engraving', value = 'no' },
+            },
+            required = true,
+        }
+    })
+
+    if not confirmation or confirmation[1] ~= 'yes' then
+        return notify(Config.Notify.cancelled, 'error')
     end
 
     busy = true

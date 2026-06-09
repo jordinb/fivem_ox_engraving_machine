@@ -396,6 +396,34 @@ local function validatePreparedTarget(source, request)
     return true, nil, target, request.text
 end
 
+local function hasFullStackEngravePermission(source)
+    return IsPlayerAceAllowed(source, Config.FullStackEngraveAcePermission or 'group.admin')
+end
+
+local function addInventoryItem(source, name, count, metadata)
+    if type(ox_inventory.AddItem) == 'function' then
+        return ox_inventory:AddItem(source, name, count, metadata)
+    end
+
+    if type(ox_inventory.addItem) == 'function' then
+        return ox_inventory:addItem(source, name, count, metadata)
+    end
+
+    return false
+end
+
+local function removeInventoryItem(source, name, count, metadata)
+    if type(ox_inventory.RemoveItem) == 'function' then
+        return ox_inventory:RemoveItem(source, name, count, metadata)
+    end
+
+    if type(ox_inventory.removeItem) == 'function' then
+        return ox_inventory:removeItem(source, name, count, metadata)
+    end
+
+    return false
+end
+
 local function getIdentifierSummary(source)
     if not Config.Webhook or Config.Webhook.IncludeIdentifiers == false then
         return nil
@@ -581,8 +609,28 @@ exports('engraving_machine', function(event, item, inventory, slot, data)
 
         local metadata = copyMetadata(target)
         local previousEngraving = getEngravingText(metadata)
+        local isStack = (target.count or 0) > 1
+        local canEngraveStack = hasFullStackEngravePermission(source)
 
         metadata = syncEngravingMetadata(metadata, source, text)
+
+        if isStack and not canEngraveStack then
+            local added = addInventoryItem(source, target.name, 1, metadata)
+            if not added then
+                notify(source, Config.Notify.failed, 'error')
+                return false
+            end
+
+            local removed = removeInventoryItem(source, target.name, 1, target.metadata)
+            if not removed then
+                notify(source, Config.Notify.failed, 'error')
+                return false
+            end
+
+            notify(source, Config.Notify.success, 'success')
+            sendWebhookLog(source, target, text, previousEngraving, metadata)
+            return
+        end
 
         ox_inventory:SetMetadata(source, target.slot, metadata)
         notify(source, Config.Notify.success, 'success')

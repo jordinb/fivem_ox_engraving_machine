@@ -35,6 +35,10 @@ Config.AllowReEngrave = true
 Config.RequireReEngraveAce = true
 Config.ReEngraveAcePermission = 'engraving.overwrite'
 
+-- Only players with this ACE permission may engrave entire stacks in place.
+-- Non-admins will instead engrave a single item from the stack and move it to a new unique stack.
+Config.FullStackEngraveAcePermission = 'group.admin'
+
 -- Prevent specific items from being engraved by adding them to the blacklist below.
 -- The engraving machine is blocked by default so players cannot engrave the tool itself.
 Config.BlockedItems = {
