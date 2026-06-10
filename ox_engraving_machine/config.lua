@@ -37,7 +37,7 @@ Config.ReEngraveAcePermission = 'engraving.overwrite'
 
 -- Only players with this ACE permission may engrave entire stacks in place.
 -- Non-admins will instead engrave a single item from the stack and move it to a new unique stack.
-Config.FullStackEngraveAcePermission = 'group.admin'
+Config.FullStackEngraveAcePermission = 'engraving.stacks'
 
 -- Prevent specific items from being engraved by adding them to the blacklist below.
 -- The engraving machine is blocked by default so players cannot engrave the tool itself.
@@ -74,7 +74,7 @@ Config.CleanHiddenTooltipFields = true
 
 -- Optional Discord admin logging.
 Config.Webhook = {
-    Enabled = false,
+    Enabled = false,-- Set to true to enable Discord logging. Requires a valid Webhook URL below
     Url = '',
     Username = 'Engraving Machine Logs',
     AvatarUrl = '',
